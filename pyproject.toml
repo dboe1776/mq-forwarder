@@ -1,0 +1,7 @@
+[project]
+name = "mq-forwarder"
+version = "0.1.0"
+description = "forward mqtt to long-term storages"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = []
