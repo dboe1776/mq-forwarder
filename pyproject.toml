@@ -5,3 +5,8 @@ description = "forward mqtt to long-term storages"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = []
+
+[dependency-groups]
+sandbox = [
+    "jupyter>=1.1.1",
+]
