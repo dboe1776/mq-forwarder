@@ -29,7 +29,7 @@ class PersistentSinkDispatcher:
         self._started = False
 
         # Configurable thresholds
-        self.max_file_size_bytes = 100_000   # 100 KB
+        self.max_file_size_bytes = 10_000    # 10 KB
         self.flush_interval_sec = 10         # wake up even if no new data
         self.batch_size_lines = 500          # process up to this many lines per flush
 
@@ -95,7 +95,7 @@ class PersistentSinkDispatcher:
         new_name = f"batch-{timestamp}.jsonl"
         new_path = current.parent / new_name
 
-        await asyncio.to_thread(current.rename, new_path)  # rename is atomic on most FS
+        await asyncio.to_thread(current.rename, new_path)  # file renamin is blocking, so run in thread
         logger.debug("file_rotated", sink_name=sink_name, old=current.name, new=new_name)
 
         # New empty current file
@@ -111,10 +111,6 @@ class PersistentSinkDispatcher:
                     [f for f in pending_dir.iterdir() if f.name != "current.jsonl"],
                     key=lambda p: p.stat().st_mtime
                 )
-
-                if not files:
-                    await asyncio.sleep(self.flush_interval_sec)
-                    continue
 
                 # Process oldest first
                 for file_path in files[:5]:  # limit per loop to avoid overload
