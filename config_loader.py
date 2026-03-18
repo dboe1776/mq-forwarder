@@ -14,10 +14,11 @@ class MqttBroker:
 
 @dataclass
 class SinkConfig:
-    type: str                       # "influxdb", "sqlite", ...
+    type: str = 'default'
     # common fields
     batch_size: int = 500
-    flush_interval_sec: int = 15
+    flush_interval_sec: int = 120
+    max_file_size_bytes: int = 10_000
     # sink-type specific fields go into extra dict
     extra: Dict[str, any] = field(default_factory=dict)
 

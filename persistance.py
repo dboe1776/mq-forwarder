@@ -25,13 +25,12 @@ class PersistentSinkDispatcher:
         self.base_dir: Path = Path(config.data_dir) / "sinks"
         self.pending_dirs: Dict[str, Path] = {}
         self.current_files: Dict[str, Path] = {}  # sink_name -> current.jsonl Path
+        self.rotate_tracker: Dict[str,int] = {}
         self.flush_tasks: Dict[str, asyncio.Task] = {}
         self._started = False
 
         # Configurable thresholds
-        self.max_file_size_bytes = 10_000    # 10 KB
-        self.flush_interval_sec = 10         # wake up even if no new data
-        self.batch_size_lines = 500          # process up to this many lines per flush
+        self.flush_check_interval_sec = 10         # wake up even if no new data
 
     async def start(self):
         if self._started:
@@ -46,6 +45,7 @@ class PersistentSinkDispatcher:
 
             current_file = pending_dir / "current.jsonl"
             self.current_files[sink_name] = current_file
+            self.rotate_tracker[sink_name] = time.time()
 
             # Start flush consumer
             task = asyncio.create_task(
@@ -76,6 +76,9 @@ class PersistentSinkDispatcher:
                 logger.warning("unknown_sink_dropping", sink_name=sink_name)
                 continue
 
+            sink_cfg: SinkConfig = self.config.sinks.get(sink_name)
+            seconds_since_rotate = time.time() - self.rotate_tracker.get(sink_name,time.time())  
+
             file_path = self.current_files[sink_name]
             try:
                 async with aiofiles.open(file_path, mode="a", encoding="utf-8") as f:
@@ -83,7 +86,10 @@ class PersistentSinkDispatcher:
 
                 # Check if rotation needed
                 stat = file_path.stat()
-                if stat.st_size > self.max_file_size_bytes:
+                if stat.st_size > sink_cfg.max_file_size_bytes:
+                    await self._rotate_file(sink_name)
+                elif seconds_since_rotate >= sink_cfg.flush_interval_sec:
+                    logger.debug(f'Flush Interval Reached for {sink_name}, rotating file')
                     await self._rotate_file(sink_name)
 
             except Exception:
@@ -101,6 +107,8 @@ class PersistentSinkDispatcher:
         # New empty current file
         current.touch()
 
+        self.rotate_tracker[sink_name] = time.time()
+
     async def _flush_loop(self, sink_name: str, sink_cfg: SinkConfig):
         pending_dir = self.pending_dirs[sink_name]
 
@@ -116,7 +124,7 @@ class PersistentSinkDispatcher:
                 for file_path in files[:5]:  # limit per loop to avoid overload
                     await self._process_file(sink_name, file_path, sink_cfg)
 
-                await asyncio.sleep(self.flush_interval_sec)
+                await asyncio.sleep(self.flush_check_interval_sec)
 
             except asyncio.CancelledError:
                 # On shutdown: try to flush any pending files
