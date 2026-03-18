@@ -9,7 +9,7 @@ import structlog
 import sys
 from collections import defaultdict
 from typing import List, Dict
-from persistance import PersistentSinkDispatcher
+from persistence import PersistentSinkDispatcher
 from models import Message
 from config_loader import AppConfig, Pipeline   # your actual loader
 
