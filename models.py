@@ -1,6 +1,6 @@
 import datetime as dt
 import json
-from dataclasses import dataclass, field, InitVar
+from dataclasses import dataclass, field, InitVar, asdict
 from typing import Any
 
 def escape_lp_identifier(s: str) -> str:
@@ -38,6 +38,9 @@ class DataPoint:
     def __post_init__(self):
         if not self.fields:
             raise ValueError("DataPoint must have at least one field")
+    
+    def to_json(self):
+        return json.dumps(asdict(self))
 
 @dataclass(kw_only=True)
 class Message:

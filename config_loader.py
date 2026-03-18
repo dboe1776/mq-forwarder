@@ -49,8 +49,8 @@ def load_config(path: Path | str) -> AppConfig:
     cfg.log_level = app_table.get("log_level", "INFO")
     cfg.data_dir  = app_table.get("data_dir", "./data")
 
-    # [mqtt.brokers.*]
-    brokers_table = data.get("mqtt", {}).get("brokers", {})
+    # [brokers.*]
+    brokers_table = data.get("brokers", {})
     for name, b in brokers_table.items():
         cfg.brokers[name] = MqttBroker(**b)
 

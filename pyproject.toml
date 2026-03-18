@@ -5,6 +5,7 @@ description = "forward mqtt to long-term storages"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "aiofiles>=25.1.0",
     "aiomqtt>=2.5.1",
     "structlog>=25.5.0",
 ]

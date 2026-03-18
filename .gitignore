@@ -209,3 +209,4 @@ __marimo__/
 # dev
 sandbox.ipynb
 settings.json
+.data/*
