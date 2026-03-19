@@ -11,6 +11,7 @@ import structlog
 
 from config_loader import AppConfig, SinkConfig
 from models import DataPoint, to_line_protocol
+from db_sinks import SinkPosterManager, PostStatusCodes
 
 logger = structlog.get_logger(__name__)
 
@@ -28,6 +29,8 @@ class PersistentSinkDispatcher:
         self.rotate_tracker: Dict[str,int] = {}
         self.flush_tasks: Dict[str, asyncio.Task] = {}
         self._started = False
+    
+        self.poster_manager = SinkPosterManager(config.sinks)
 
         # Configurable thresholds
         self.flush_check_interval_sec = 10         # wake up even if no new data
@@ -65,6 +68,9 @@ class PersistentSinkDispatcher:
             task.cancel()
 
         await asyncio.gather(*self.flush_tasks.values(), return_exceptions=True)
+
+        await self.poster_manager.close()
+
         logger.info("persistent_dispatcher_stopped")
 
     async def dispatch_point(self, point: DataPoint, sink_names: List[str]):
@@ -161,18 +167,8 @@ class PersistentSinkDispatcher:
                 return
 
             # Try to flush to backend
-            success = await self._flush_batch_to_backend(sink_name, sink_cfg, lines)
-
-            if success:
-                await asyncio.to_thread(flushing_path.unlink)
-                logger.info("batch_flushed_success", sink=sink_name, count=len(lines))
-            else:
-                failed_dir = file_path.parent.parent / "failed"
-                failed_dir.mkdir(exist_ok=True)
-                failed_path = failed_dir / file_path.name
-                await asyncio.to_thread(flushing_path.rename, failed_path)
-                logger.warning("batch_flush_failed_moved", sink=sink_name, file=failed_path.name)
-
+            await self._flush_batch_to_backend(sink_name, lines, flushing_path)
+            
         except Exception:
             logger.exception("process_file_failed", sink=sink_name, file=file_path.name)
             # Move back to pending if possible, or leave in flushing
@@ -180,20 +176,28 @@ class PersistentSinkDispatcher:
     async def _flush_batch_to_backend(
         self,
         sink_name: str,
-        sink_cfg: SinkConfig,
-        batch: List[DataPoint]
+        batch: List[DataPoint],
+        flushing_path
     ) -> bool:
-        # Placeholder — replace with real implementation per sink type
+
         logger.info(
             "backend_flush_attempt",
             sink=sink_name,
-            type=sink_cfg.type,
             batch_size=len(batch)
         )
 
-        # For testing: pretend success after logging
-        # Later: if sink_cfg.type == "influxdb": await influx_write(...)
-        #       elif sink_cfg.type == "sqlite": await sqlite_write(...)
+        status = await self.poster_manager.post_data(sink_name, batch)
 
-        await asyncio.sleep(0.1)  # simulate work
-        return True  # change to False to test failure path
+        if status == PostStatusCodes.SUCCESS:
+            logger.info("batch_flushed_success, deleting file", sink=sink_name)
+            await asyncio.to_thread(flushing_path.unlink)
+        elif status == PostStatusCodes.FAIL:
+            # move to failed/
+            logger.info("batch_flushed_failed, moving", sink=sink_name)
+            failed_path = flushing_path.parent / "failed" / flushing_path.name
+            (flushing_path.parent / "failed").mkdir(exist_ok=True)
+            await asyncio.to_thread(flushing_path.rename, failed_path)
+        elif status == PostStatusCodes.TRY_LATER:
+            # move back to pending/ or leave for next cycle
+            await asyncio.to_thread(flushing_path.rename, flushing_path.parent.parent / "pending" / flushing_path.name)
+    

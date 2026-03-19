@@ -87,27 +87,33 @@ class Message:
         return cls(**data, topic=topic)
 
 
-def to_line_protocol(point: DataPoint) -> str:
+def to_line_protocol(point: DataPoint,ignore_errors=False) -> str:
     """Convert DataPoint to InfluxDB v2 Line Protocol (ns precision)."""
-    if not point.fields:
-        raise ValueError("Cannot write DataPoint with no fields")
+    try:
+        if not point.fields:
+            raise ValueError("Cannot write DataPoint with no fields")
 
-    meas = escape_lp_identifier(point.measurement)
+        meas = escape_lp_identifier(point.measurement)
 
-    tag_parts = [
-        f"{escape_lp_identifier(k)}={escape_lp_identifier(v)}"
-        for k, v in sorted(point.tags.items())   # sort → deterministic output
-    ]
-    tags_str = "," + ",".join(tag_parts) if tag_parts else ""
+        tag_parts = [
+            f"{escape_lp_identifier(k)}={escape_lp_identifier(v)}"
+            for k, v in sorted(point.tags.items())   # sort → deterministic output
+        ]
+        tags_str = "," + ",".join(tag_parts) if tag_parts else ""
 
-    field_parts = [
-        f"{escape_lp_identifier(k)}={escape_lp_field_value(v)}"
-        for k, v in point.fields.items()
-        if v is not None
-    ]
-    fields_str = ",".join(field_parts)
+        field_parts = [
+            f"{escape_lp_identifier(k)}={escape_lp_field_value(v)}"
+            for k, v in point.fields.items()
+            if v is not None
+        ]
+        fields_str = ",".join(field_parts)
 
-    return f"{meas}{tags_str} {fields_str} {point.time_ns}"
+        return f"{meas}{tags_str} {fields_str} {point.time_ns}"
+    except Exception as e:
+        if ignore_errors: return None
+        else:
+            # logger.warning("lp_conversion_failed", point_time=point.time_ns, error=str(e))
+            raise e
 
 if __name__ == '__main__':
     sample = f"""{{
