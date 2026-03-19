@@ -62,7 +62,7 @@ class Message:
         self.tags["id"] = self.id
 
         self.fields = self.fields or {}
-        self.fields["t_receive"] = round(self.t_receive.timestamp(), 3)
+        self.fields["t_receive"] = int(self.t_receive.timestamp())
 
         # Fallback measurement name
         if self.measurement is None:

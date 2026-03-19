@@ -57,8 +57,13 @@ def load_config(path: Path | str) -> AppConfig:
 
     # [sinks.*]
     sinks_table = data.get("sinks", {})
+    common_sink_keys=['type','batch_size','flush_interval_sec','max_file_size_bytes']    
     for name, s in sinks_table.items():
-        sink = SinkConfig(type=s.pop("type"), extra=s)
+
+        common_keys = {k:s.pop(k,None) for k in common_sink_keys}
+        common_keys = {k:v for k,v in common_keys.items() if v is not None}
+        extras = {k:v for k,v in s.items() if v is not None}
+        sink = SinkConfig(**common_keys,extra=extras)
         cfg.sinks[name] = sink
 
     # [[pipelines]]

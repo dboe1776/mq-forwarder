@@ -1,0 +1,52 @@
+[app]
+log_level = "INFO"
+data_dir = "./.data"
+
+[brokers.default]
+host = "mq.broker.com"
+port = 8883
+tls = true
+username = "user"
+password = "password"           # plain text for now
+client_id_prefix = "mq-fw-"
+
+# ────────────────────────────────────────────────
+# Reusable sinks (only declared ones)
+# ────────────────────────────────────────────────
+[sinks.influx-live]
+type = "influxdb"
+url = "http://influxdb:8086"
+token = "my-token-here"
+org = "myorg"
+bucket = "live"
+batch_size = 800
+flush_interval_sec = 12
+version = 1
+
+[sinks.questdb]
+type = "questdb"
+url = "http://questdb:8080"
+username = 'quest_user'
+password = 'quest_password'
+batch_size = 800
+flush_interval_sec = 60
+compress = true
+
+# [sinks.sqlite-edge]
+# type = "sqlite"
+# path = "{data_dir}/edge.db"
+# batch_size = 400
+# flush_interval_sec = 20
+
+# ────────────────────────────────────────────────
+# Pipelines – each defines topics + sinks + optional mapping
+# ────────────────────────────────────────────────
+[[pipelines]]
+name = "home-telemetry"
+broker = "default"
+topics = [
+    "home/telemetry/+",
+]
+sinks = ["questdb"]          # multiple = fan-out
+[pipelines.measurement_map]
+    "home/telemetry/+" = "home_telemetry"

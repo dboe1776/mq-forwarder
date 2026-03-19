@@ -210,3 +210,4 @@ __marimo__/
 sandbox.ipynb
 settings.json
 .data/*
+config.toml

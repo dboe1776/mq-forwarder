@@ -3,14 +3,14 @@
 import asyncio
 import json
 import time
-from pathlib import Path
-from typing import Dict, List, Optional
-
 import aiofiles
 import structlog
 
+from pathlib import Path
+from typing import Dict, List
+
 from config_loader import AppConfig, SinkConfig
-from models import DataPoint, to_line_protocol
+from models import DataPoint
 from db_sinks import SinkPosterManager, PostStatusCodes
 
 logger = structlog.get_logger(__name__)

@@ -7,11 +7,12 @@ import json
 import aiomqtt
 import structlog
 import sys
+import utils  
 from collections import defaultdict
 from typing import List, Dict
 from persistence import PersistentSinkDispatcher
 from models import Message
-from config_loader import AppConfig, Pipeline   # your actual loader
+from config_loader import AppConfig, Pipeline
 
 # Windows asyncio fix — must be very early
 if sys.platform == 'win32':
@@ -44,16 +45,22 @@ def find_matching_pipelines(topic: str, pipelines: List[Pipeline]) -> List[Pipel
     return matches
 
 def get_effective_measurement(
-    original: str,
+    original_meas: str,
     topic: str,
     pipeline: Pipeline
 ) -> str:
-    """Apply pipeline-specific measurement override if present."""
+    """Apply pipeline-specific measurement override if present.
+        By default, if a message does not include a measurement tag,
+        we use the topic with "/" mapped to "_". Otherwise, the measurement
+        is pulled from the messge content. However if the the pipeline
+        config defines an override at the topic level, we prefer that over all.
+        even if the message itself defines a measurement.  
+    """
     meas_map = pipeline.measurement_map
-    if topic in meas_map:
-        return meas_map[topic]
-    # Future extension point: default template
-    return original
+    if resolved := utils.resolve_measurement(topic,meas_map):
+        return resolved
+    else:
+        return original_meas
 
 async def run_single_broker_listener(
     config: AppConfig,
@@ -130,11 +137,10 @@ async def run_single_broker_listener(
                     )
 
                     for pipe in matching:
-                        effective_meas = get_effective_measurement(msg.measurement, topic, pipe)
-
+                        msg.measurement = get_effective_measurement(msg.measurement, topic, pipe)
+                        
                         # Create enriched DataPoint
                         point = msg.to_data_point()
-                        point.measurement = effective_meas   # apply override
 
                         if not pipe.sinks:
                             lp = models.to_line_protocol(point)
@@ -185,7 +191,7 @@ async def run_all_listeners(config: AppConfig):
 if __name__ == "__main__":
     from config_loader import load_config
 
-    config = load_config("sample_config.toml")  # adjust path
+    config = load_config("config.toml")  # adjust path
 
     async def main():
         print("Starting multi-broker MQTT listeners...\n")
