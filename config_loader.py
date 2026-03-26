@@ -30,6 +30,7 @@ class Pipeline:
     sinks: List[str] = field(default_factory=list)  # can be empty → stdout
     measurement_map: Dict[str, str] = field(default_factory=dict)
     field_mapping: Dict[str, str] = field(default_factory=dict)
+    bundle_timeout_ms: int = 800   # default
 
 @dataclass
 class AppConfig:

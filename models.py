@@ -1,7 +1,7 @@
 import datetime as dt
 import json
-from dataclasses import dataclass, field, InitVar, asdict
-from typing import Any
+from dataclasses import dataclass, field, asdict, replace, InitVar
+from typing import Any, Optional, List
 
 def escape_lp_identifier(s: str) -> str:
     """Escape measurement, tag key/value, field key for Line Protocol."""
@@ -28,6 +28,16 @@ def escape_lp_field_value(v: Any) -> str:
     else:
         raise ValueError(f"Unsupported field value type: {type(v).__name__}")
 
+def merge_messages(messages:List["Message"]) -> "Message":
+    messages = sorted(messages,key=lambda x: getattr(x,'time'),reverse=True)
+    
+    # Union tags + fields (last-wins on overlap)
+    tags = {k:v for d in [m.tags for m in messages] for k,v in d.items() if v is not None}
+    fields = {k:v for d in [m.fields for m in messages] for k,v in d.items() if v is not None}
+    
+    # Use first messages as base -> gives us min time, and t_receive
+    return replace(messages[0], tags=tags,fields=fields,bundle_id=None,bundle_size=None,topic=None)
+
 @dataclass(kw_only=True)
 class DataPoint:
     time_ns: int              # nanoseconds since epoch
@@ -47,15 +57,24 @@ class Message:
     time: float | int = field(default_factory=lambda: dt.datetime.now(dt.timezone.utc).timestamp())
     t_receive: dt.datetime = field(default_factory=lambda: dt.datetime.now(dt.timezone.utc))
     id: str
+    topic: str
     measurement: str | None = None           # renamed for clarity
     tags: dict[str, str] | None = field(default_factory=dict)
     fields: dict[str, Any] | None = field(default_factory=dict)
-    topic: InitVar[str]
+    bundle_id: Optional[str] = None
+    bundle_size: Optional[int] = None
+    bid: InitVar[str|None] = None           # alias for bundle_id
+    bn: InitVar[str|None] = None            # alias for bundle_size
 
-    def __post_init__(self, topic: str):
+    def __post_init__(self,bid,bn):
         # Basic sanity on time (seconds since epoch)
         if not (1_500_000_000 < self.time < 4_000_000_000):  # roughly 2017–2096
             raise ValueError(f"Invalid timestamp: {self.time} (expected seconds since epoch)")
+
+        if bid is not None:
+            self.bundle_id = bid
+        if bn is not None:
+            self.bundle_size = bn
 
         # Enrich
         self.tags = self.tags or {}
@@ -66,7 +85,7 @@ class Message:
 
         # Fallback measurement name
         if self.measurement is None:
-            self.measurement = topic.replace("/", "_").replace(" ", "_").strip("_")
+            self.measurement = self.topic.replace("/", "_").replace(" ", "_").strip("_")
 
     def to_data_point(self) -> DataPoint:
         return DataPoint(

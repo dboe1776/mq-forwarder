@@ -8,7 +8,7 @@ import aiomqtt
 import structlog
 import utils  
 from collections import defaultdict
-from typing import List, Dict
+from typing import List, Dict, Optional, Tuple
 from persistence import PersistentSinkDispatcher
 from models import Message
 from config_loader import AppConfig, Pipeline
@@ -56,11 +56,99 @@ def get_effective_measurement(
     else:
         return original_meas
 
+class MessageBundler:
+    """Groups partial messages by (device_id, bundle_id) and merges them."""
+
+    def __init__(self):
+        # Key: (device_id, bundle_id, topic) → list of Messages + timeout task
+        self.buffers: Dict[Tuple[str, str, str], List[Message]] = defaultdict(list)
+        self.timeout_tasks: Dict[Tuple[str, str, str], asyncio.Task] = {}
+
+    async def add_message(
+        self,
+        msg: Message,
+        pipe: Pipeline,
+        dispatcher: PersistentSinkDispatcher
+    ) -> None:
+        if msg.bundle_id is None:
+            # Normal path - no bundling
+            point = msg.to_data_point()
+            await dispatcher.dispatch_point(point, pipe.sinks)
+            return
+
+        if msg.bundle_size is None or msg.bundle_size < 1:
+            logger.warning("bundle_missing_size", bundle_id=msg.bundle_id, id=msg.id)
+            # Fallback: dispatch as-is
+            point = msg.to_data_point()
+            await dispatcher.dispatch_point(point, pipe.sinks)
+            return
+
+        key = (msg.id, msg.bundle_id, msg.topic)  # scope by device MAC + bundle
+
+        self.buffers[key].append(msg)
+
+        # Cancel existing timeout if any
+        if key in self.timeout_tasks:
+            self.timeout_tasks[key].cancel()
+
+        # Schedule new timeout
+        self.timeout_tasks[key] = asyncio.create_task(
+            self._timeout_handler(key, pipe, dispatcher)
+        )
+
+        # Check if we have a complete bundle
+        if len(self.buffers[key]) >= msg.bundle_size:
+            await self._flush_bundle(key, pipe, dispatcher)
+
+    async def _timeout_handler(self, key: Tuple[str, str, str], pipe: Pipeline, dispatcher: PersistentSinkDispatcher):
+        try:
+            await asyncio.sleep(pipe.bundle_timeout_ms / 1000.0)
+            if key in self.buffers:
+                logger.warning("bundle_timeout", bundle_key=key, received=len(self.buffers[key]))
+                await self._flush_bundle(key, pipe, dispatcher)
+        except asyncio.CancelledError:
+            pass  # Normal when we get more parts quickly
+        except Exception:
+            logger.exception("bundle_timeout_error", bundle_key=key)
+
+    async def _flush_bundle(
+        self,
+        key: Tuple[str, str, str],
+        pipe: Pipeline,
+        dispatcher: PersistentSinkDispatcher
+    ):
+        parts: List[Message] = self.buffers.pop(key, [])
+        if key in self.timeout_tasks:
+            task = self.timeout_tasks.pop(key)
+            task.cancel()
+
+        if not parts: return
+
+        merged_msg = models.merge_messages(parts)
+
+        # Enrich measurement again (in case it depends on pipeline)
+        merged_msg.measurement = get_effective_measurement(
+            merged_msg.measurement, merged_msg.topic or "", pipe
+        )
+
+        point = merged_msg.to_data_point()
+
+        logger.info(
+            "bundle_merged",
+            bundle_key=key,
+            parts=len(parts),
+            expected=parts[0].bundle_size,
+            time_ns=point.time_ns
+        )
+
+        await dispatcher.dispatch_point(point, pipe.sinks)
+
 async def run_single_broker_listener(
     config: AppConfig,
     broker_name: str,
     pipelines: List[Pipeline],
-    dispatcher: PersistentSinkDispatcher
+    dispatcher: PersistentSinkDispatcher,
+    bundler: MessageBundler
 ):
     """
     Run a single MQTT client / listener for one broker and its associated pipelines.
@@ -73,6 +161,7 @@ async def run_single_broker_listener(
 
     tls_params = aiomqtt.TLSParameters() if broker.tls else None
 
+    attempts = 0
     while True:
         try:
             async with aiomqtt.Client(
@@ -114,18 +203,14 @@ async def run_single_broker_listener(
 
                         for pipe in matching:
                             msg.measurement = get_effective_measurement(msg.measurement, topic, pipe)
-                            
-                            # Create enriched DataPoint
-                            point = msg.to_data_point()
 
                             if not pipe.sinks:
-                                lp = models.to_line_protocol(point)
+                                lp = models.to_line_protocol(msg.to_data_point())
                                 logger.info("stdout_fallback",pipeline=pipe.name,topic=topic,lp=lp)
-
                             else:
-                                # Dispatch to queues
-                                await dispatcher.dispatch_point(point, pipe.sinks)
                                 logger.debug("appended_to_persistence", pipeline=pipe.name, sinks=pipe.sinks)
+                                await bundler.add_message(msg, pipe, dispatcher)                            
+                            
 
                     except UnicodeDecodeError:
                         logger.warning("non_utf8_payload", broker=broker_name, topic=topic)
@@ -152,11 +237,12 @@ async def run_all_listeners(config: AppConfig, dispatcher: PersistentSinkDispatc
     Start one listener task per unique broker using TaskGroup.
     """
     broker_groups = group_pipelines_by_broker(config)
+    bundler = MessageBundler()
 
     async with asyncio.TaskGroup() as tg:
         for broker_name, pipelines in broker_groups.items():
             tg.create_task(
-                run_single_broker_listener(config, broker_name, pipelines, dispatcher),
+                run_single_broker_listener(config, broker_name, pipelines, dispatcher, bundler),
                 name=f"mqtt-listener-{broker_name}"
             )
 
