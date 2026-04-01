@@ -56,7 +56,7 @@ class DataPoint:
 class Message:
     time: float | int = field(default_factory=lambda: dt.datetime.now(dt.timezone.utc).timestamp())
     t_receive: dt.datetime = field(default_factory=lambda: dt.datetime.now(dt.timezone.utc))
-    id: str
+    id: Optional[str] = None
     topic: str
     measurement: str | None = None           # renamed for clarity
     tags: dict[str, str] | None = field(default_factory=dict)
@@ -78,7 +78,15 @@ class Message:
 
         # Enrich
         self.tags = self.tags or {}
-        self.tags["id"] = self.id
+
+        if (self.id is None) and (self.tags.get('id') is None):
+            raise TypeError(f"id must either be in base or in tags")
+        
+        elif self.id is None:
+            self.id = self.tags.get('id')
+
+        else:
+            self.tags["id"] = self.id
 
         self.fields = self.fields or {}
         self.fields["t_receive"] = int(self.t_receive.timestamp())
